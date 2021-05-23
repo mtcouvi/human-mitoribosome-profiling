@@ -1,73 +1,71 @@
-# Human mitoribosome profiling analysis
+This script uses A site bedGraphs from step 4 and calculates mean and individual codon occupancies. 
 
-This repository includes the scripts and annotation files needed to analyze mitoribosome profiling data generated from human cells with or without mouse spike-in. The directories are listed in order to take raw fastq files through trimming, alignment, quality control, and many other library characteristics. There are README files for each analysis step explaining how scripts are run and what is generated with each. Optimized to run on HMS O2 computing cluster (SLURM job scheduler).
-
-# Analysis steps
-
-0. Create STAR index
-1. Trim and align raw reads, remove PCR duplicates  >  get library compositions, RPF length distributions, 5' bedgraphs for viewing on IGV
-2. Make bed files for Vplots  >  5' and 3' plus(P) and minus(M) files for input to Lengths_vs_Pos_Vplot.R to visualize read lengths along genes
-3. Calculate periodicity on 5' and 3' ends PER RPF LENGTH  >  Needed for accurately determining A-site transformation, in combination with RPF length distibutions (step 1) and Vplots: RPFlength vs. genomic position (step 2)
-4. A-site transformation  >  get periodicity and coverage, A-site bedgraphs for viewing on IGV
-5. Count reads on features using featureCounts  >  get unique- and multi- (all-) aligned readcounts across genes. Use in AddGeneName_RPK.R to get RPK values
-6. Get codon occupancy
-
-# Data availability and manuscript
-
-Fastq files are deposited in the GEO database under the accession number GSE173283. The link to our full manuscript will be provided here upon publication.
-
-
-<img src="Image.jpg" width="90%">
-
-
-
-
-To install:  
-Download zipped repository and unzip into directory with *fastq.gz files.  
-Run all code blocks in steps 1-6 from this top directory.  
-Intermediate as well as many other useful files will output to subdirectories.  
-Final results and plots will output to working directory.  
-logs/ contains all logs, including error logs
-
-Required R packages: data.table, pheatmap, inlmisc, RColorBrewer, stringr, scales, Rsubread, rlist, Rfast  
-To install packages:
+# 1. Run CodonOccupancy.sh
+This script calls python scripts that require biopython, numpy and scipy, so first need to set up a python virtual environment to install packages.  
+Do this only once for each experiment (directory). It will create a new directory with the name of the virtual environment (hMitoRP).
 ```bash
-# Enter interactive node on O2
-srun -p interactive --pty --mem=10G -t 0-02:00 /bin/bash
-# Load R module
+module purge
+module load gcc/6.2.0
+module load python/3.7.4
+
+# Set up virtual environment
+virtualenv hMitoRP
+
+# Activate virtual environment
+source mrp/bin/activate
+unset PYTHONPATH
+pip3 install biopython
+pip3 install numpy
+pip3 install scipy
+
+# Leave virtual environment
+deactivate
+```
+
+Replace S1, S2, etc with library (sample) names, update number of samples (e.g. for 4 samples use {0..3}), and run code block.
+```bash
+Libs="S1 S2 S3 S4"
+sizeRange="31to33"
+scriptpath="./6_CodonOccupancy/Scripts/CodonOccupancy.sh"
+
+for lib in $Libs
+do
+sbatch -e logs/6_CodonOccupancy_${lib}.err -o logs/6_CodonOccupancy_${lib}.log $scriptpath $lib $sizeRange
+done
+```
+
+# 2. Combine outputs
+**Do not do this until all jobs are complete**  
+
+Be sure to modify paste command based on number of samples you have in your experiment. Only the last sample added should include the fourth column, which is codon frequency.
+
+```bash
+cd 6_CodonOccupancy
+Experiment="MitoRP1"
+Libs=("S1" "S2" "S3" "S4")
+sizeRange="31to33"
+
+paste <(awk '{print $1"\t"$2"\t"$3}' ${Libs[0]}_${sizeRange}_CodonDensities.txt) <(awk '{print $2"\t"$3}' ${Libs[1]}_${sizeRange}_CodonDensities.txt) <(awk '{print $2"\t"$3}' ${Libs[2]}_${sizeRange}_CodonDensities.txt) <(awk '{print $2"\t"$3"\t"$4}' ${Libs[3]}_${sizeRange}_CodonDensities.txt) > ../${Experiment}_${sizeRange}_CodonDensities.txt
+cd ..
+```
+  
+# 3. Outputs
+  - Mean occupancy for each codon and standard deviation across all occurances of that codon: \*_CodonDensities.txt 
+  - Individual occupancies for all occurances of each codon: \*_indCodonDensities.txt
+
+# 4. Make plots
+Requires the following R packages: Rfast
+Run R script CodonDensities_tRNAabundance.R
+```bash
 module load R/4.0.1
-# Begin R session on command line
-R
+Experiment="MitoRP1"
+sizeRange="31to33"
+Rscript ./6_CodonOccupancy/Scripts/CodonDensities_tRNAabundance.R $Experiment $sizeRange
 ```
-```
-install.packages(c('data.table', 'pheatmap', 'inlmisc', 'RColorBrewer', 'stringr', 'scales', 'Rsubread', 'rlist', 'Rfast')
-quit()
-exit
-```
-
-
-## 0_CreateSTARindex
-Download fasta and gtf files from desired source (e.g. GENCODE) and follow instuctions.txt  
-
-## 1_AlignData  
-Initial alignment and quality control  
-Follow steps in ./1_AlignData/README.md  
-
-## 2_MakeLengthBeds  
-Optional step to make Vplots. Depends on output from 1_AlignData  
-Follow steps in ./2_MakeLengthBeds/README.md  
-
-## 3_CountFramePerLength
-Optional step to observe periodicity for each RPF size. Depends on output from 1_AlignData  
-Follow steps in ./3_CountFramePerLength/README.md  
-
-## 4_AsiteTransformation
-Transforms data to A site and produces A site bedGraphs based on given RPF size range and offsets. Also calculates codon coverage and periodicity for provided RPF sizes. Depends on output from 1_AlignData and you should use information from 2_MakeLengthBeds and 3_CountFramePerLength to decide on size range and offsets.
-Follow steps in ./4_AsiteTransformation/README.md  
-
-## 5_CountReadsOnFeatures
-Get read counts on genes using featureCounts from Rsubread R package. Script and annotations are included to convert gene IDs to gene names and calculate RPK.  
-Follow steps in ./5\_CountReadsOnFeatures/README.md
-
-## 6_CodonOccupancy
-Get codon occupancy and make bar plots of mean occupancy, box plots of individual codon occupancy, and scatter plots of codon occupancy vs tRNA abundance. Follow steps in ./6_CodonOccupancy/README.md                                                                                                        
+This produces 3 plot files: 
+- Barplot of mean codon occupancies with a bar for each sample. Modify script to plot others.
+  - \*_CodonDens_barplot.pdf
+- Boxplots of individual codon occupancies for Asp, Leu, Phe for each sample
+  - \*_indCodonDens_boxplot.pdf
+- Scatterplots of mean codon occupancy for each sample vs tRNA abundance from myoblasts (Richter et al, Nat Commun. 2018)
+  - \*_CodonDens_vs_tRNAabundance.pdf
